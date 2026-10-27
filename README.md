@@ -42,7 +42,7 @@
 
 ## 🖼️ 应用预览 (Preview)
 
-![Muse Desktop Preview](assets/screenshot.png)
+![Muse Desktop Preview](assets/muse-desktop-preview.png)
 
 ---
 
