@@ -10,24 +10,8 @@
     "frontendDist": "https://muse.ai"
   },
   "app": {
-    "withGlobalTauri": false,
-    "windows": [
-      {
-        "title": "Muse",
-        "width": 1280,
-        "height": 860,
-        "minWidth": 900,
-        "minHeight": 600,
-        "resizable": true,
-        "maximized": false,
-        "center": true,
-        "decorations": true,
-        "visible": true,
-        "label": "main",
-        "url": "https://muse.ai",
-        "userAgent": null
-      }
-    ],
+    "withGlobalTauri": true,
+    "windows": [],
     "security": {
       "csp": null
     }

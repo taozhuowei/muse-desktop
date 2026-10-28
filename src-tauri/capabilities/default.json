@@ -1,1 +1,13 @@
-{"$schema":"https://schema.tauri.app/config/2/capability","description":"No Tauri JS APIs are needed: the app is just the muse.ai WebView.","identifier":"default","permissions":[],"windows":["main"]}
+{
+  "$schema": "https://schema.tauri.app/config/2/capability",
+  "identifier": "default",
+  "description": "Allow muse.ai to send desktop notifications",
+  "local": true,
+  "remote": {
+    "urls": ["https://muse.ai", "https://muse.ai/*", "https://*.muse.ai/*"]
+  },
+  "windows": ["main"],
+  "permissions": [
+    "core:event:default"
+  ]
+}

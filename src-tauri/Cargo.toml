@@ -19,6 +19,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
 ] }
+tauri-plugin-notification = "2"
 
 [profile.release]
 # Keep the binary small. This is a WebView shell, it does not need

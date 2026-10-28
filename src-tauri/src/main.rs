@@ -15,7 +15,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::Manager;
+use tauri::{Listener, Manager};
+use tauri_plugin_notification::NotificationExt;
 
 static IS_EXITING: AtomicBool = AtomicBool::new(false);
 
@@ -30,6 +31,12 @@ pub enum CloseAction {
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
 pub struct AppSettings {
     pub close_action: Option<CloseAction>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct NotificationPayload {
+    pub title: String,
+    pub body: Option<String>,
 }
 
 fn get_settings_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<std::path::PathBuf> {
@@ -214,8 +221,31 @@ fn handle_close_requested(window: &tauri::WebviewWindow) {
     }
 }
 
+fn trigger_desktop_notification<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    title: &str,
+    body: Option<&str>,
+) {
+    let mut builder = app.notification().builder().title(title);
+    if let Some(b) = body {
+        if !b.trim().is_empty() {
+            builder = builder.body(b);
+        }
+    }
+    if let Err(err) = builder.show() {
+        eprintln!("[Muse Desktop] 发送桌面通知失败: {err}");
+    }
+}
+
+#[tauri::command]
+fn push_desktop_notification(app: tauri::AppHandle, title: String, body: Option<String>) {
+    trigger_desktop_notification(&app, &title, body.as_deref());
+}
+
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
+        .invoke_handler(tauri::generate_handler![push_desktop_notification])
         .setup(|app| {
             let show_item = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
             let reset_item = MenuItem::with_id(app, "reset_preference", "重置关闭提示", true, None::<&str>)?;
@@ -282,17 +312,35 @@ fn main() {
                 })
                 .build(app)?;
 
-            if let Some(window) = app.get_webview_window("main") {
-                let win_clone = window.clone();
-                window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        if !IS_EXITING.load(Ordering::SeqCst) {
-                            api.prevent_close();
-                            handle_close_requested(&win_clone);
-                        }
+            // 注册全局通知事件监听器 (处理来自前端注入脚本的推送)
+            let app_handle = app.handle().clone();
+            app.listen("muse-notification", move |event| {
+                if let Ok(payload) = serde_json::from_str::<NotificationPayload>(event.payload()) {
+                    trigger_desktop_notification(&app_handle, &payload.title, payload.body.as_deref());
+                }
+            });
+
+            // 动态构建主 WebView 窗口并注入通知拦截脚本与后台防挂起参数
+            let url: tauri::Url = "https://muse.ai".parse().expect("有效的主站 URL");
+            let window = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(url))
+                .title("Muse")
+                .inner_size(1280.0, 860.0)
+                .min_inner_size(900.0, 600.0)
+                .center()
+                .resizable(true)
+                .additional_browser_args("--disable-background-timer-throttling --disable-backgrounding-occluded-windows")
+                .initialization_script(include_str!("inject.js"))
+                .build()?;
+
+            let win_clone = window.clone();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    if !IS_EXITING.load(Ordering::SeqCst) {
+                        api.prevent_close();
+                        handle_close_requested(&win_clone);
                     }
-                });
-            }
+                }
+            });
 
             Ok(())
         })
