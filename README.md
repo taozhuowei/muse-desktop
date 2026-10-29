@@ -78,7 +78,8 @@
 ### 直接下载使用 (Pre-built Release)
 
 前往项目的 [Releases](../../releases) 页面，下载最新的二进制文件：
-- **Windows**：下载 `muse-desktop.exe` 或安装包直接双击运行。
+- **Windows 安装版（推荐，支持原生 Muse 图标与标题通知）**：下载并运行 `muse-desktop_0.1.0_x64-setup.exe`（仅约 2.1 MB），完成标准安装后通知中心直接展示官方 Muse 图标与名称。
+- **Windows 便携免安装版**：下载 `muse-desktop.exe`，免安装双击即用。
 
 ---
 

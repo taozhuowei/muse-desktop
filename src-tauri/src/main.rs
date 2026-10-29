@@ -348,23 +348,21 @@ fn trigger_desktop_notification<R: tauri::Runtime>(
     let mut success = false;
     match builder.show() {
         Ok(_) => {
-            log_msg("Notify", "INFO", "tauri-plugin-notification 派发返回 Ok");
+            log_msg("Notify", "INFO", "tauri-plugin-notification 派发成功 (使用 Muse 官方名称与图标)");
             success = true;
         }
         Err(err) => {
             log_msg("Notify", "WARN", &format!("tauri-plugin-notification 派发失败: {err}"));
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        // Windows 平台：绿色版/未安装注册 AUMID 时，即便返回 Ok，Windows Action Center 也可能静默吞掉
-        // 因此执行 PowerShell 原生 WinRT 兜底，确保桌面绝对弹出系统气泡
-        if let Err(e) = send_windows_powershell_toast(title, body_str) {
-            log_msg("Notify", "ERROR", &format!("PowerShell WinRT Toast 兜底执行异常: {e}"));
-        } else {
-            log_msg("Notify", "INFO", "Windows 原生 Toast 通知已成功推送到屏幕右下角");
-            success = true;
+            #[cfg(target_os = "windows")]
+            {
+                log_msg("Notify", "INFO", "尝试使用系统通用 Toast 通道兜底发送...");
+                if let Err(e) = send_windows_powershell_toast(title, body_str) {
+                    log_msg("Notify", "ERROR", &format!("兜底 Toast 执行异常: {e}"));
+                } else {
+                    log_msg("Notify", "INFO", "系统通用 Toast 兜底发送成功");
+                    success = true;
+                }
+            }
         }
     }
 
