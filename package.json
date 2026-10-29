@@ -1,6 +1,6 @@
 {
   "name": "muse-desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Lightweight Tauri desktop wrapper for muse.ai. Loads the real site in the system WebView; login state is kept by the WebView itself.",
   "private": true,
   "scripts": {
