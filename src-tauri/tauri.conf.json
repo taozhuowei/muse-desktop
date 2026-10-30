@@ -1,13 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "muse-desktop",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "identifier": "com.tao.muse-desktop",
   "build": {
     "beforeDevCommand": null,
     "beforeBuildCommand": null,
-    "devUrl": "https://muse.ai",
-    "frontendDist": "https://muse.ai"
+    "frontendDist": "ui"
   },
   "app": {
     "withGlobalTauri": true,

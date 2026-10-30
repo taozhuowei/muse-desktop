@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Muse Desktop 设置</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main class="shell">
+    <section id="settings-panel" class="panel" aria-labelledby="settings-title" hidden>
+      <header class="panel-header">
+        <div><h1 id="settings-title">设置</h1><p>管理桌面应用</p></div>
+        <button id="close-settings" class="icon-button" type="button" aria-label="关闭设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </header>
+      <div class="setting-row">
+        <div><label for="autostart">开机自启</label><p>登录电脑时自动启动 Muse Desktop</p></div>
+        <input id="autostart" class="switch" type="checkbox" role="switch" disabled>
+      </div>
+      <div class="setting-row">
+        <div><span class="setting-label">清理缓存</span><p>清除网页磁盘缓存，保留登录信息</p></div>
+        <button id="clear-cache" class="action-button" type="button">清理</button>
+      </div>
+      <div class="setting-row">
+        <div><span class="setting-label">软件更新</span><p id="update-description">检查是否有可用更新</p></div>
+        <button id="check-updates" class="action-button" type="button" disabled>检查更新</button>
+      </div>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+    </section>
+    <footer class="bar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Muse Desktop</span><span id="version" class="version">版本加载中</span></div>
+      <button id="settings-toggle" class="icon-button" type="button" aria-label="打开设置" aria-expanded="false" aria-controls="settings-panel">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.8 3.7h4.4l.5 2.1c.5.2 1 .5 1.5.8l2.1-.6 2.2 3.8-1.6 1.5v1.4l1.6 1.5-2.2 3.8-2.1-.6c-.5.3-1 .6-1.5.8l-.5 2.1H9.8l-.5-2.1c-.5-.2-1-.5-1.5-.8l-2.1.6-2.2-3.8 1.6-1.5v-1.4L3.5 9.8l2.2-3.8 2.1.6c.5-.3 1-.6 1.5-.8l.5-2.1z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+    </footer>
+  </main>
+</body>
+</html>

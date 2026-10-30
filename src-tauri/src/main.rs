@@ -1,8 +1,6 @@
 // Muse desktop shell.
 //
-// This app deliberately has no local frontend and no custom commands.
-// It opens https://muse.ai directly in the operating system's WebView
-// (WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux).
+// 远程网页与本地设置栏使用独立的 WebView。
 //
 // Close action:
 //   - On close request, prompt user: minimize to system tray or exit.
@@ -11,10 +9,14 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod browser_cache;
+mod shell_settings;
+mod update_check;
+
+use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Listener, Manager};
@@ -53,14 +55,20 @@ fn init_logger<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("muse-desktop.log");
         *LOG_FILE_PATH.lock().unwrap() = Some(path.clone());
-        log_msg("Rust", "INFO", &format!("日志服务启动，日志保存于: {}", path.display()));
+        log_msg(
+            "Rust",
+            "INFO",
+            &format!("日志服务启动，日志保存于: {}", path.display()),
+        );
     }
 }
 
 fn get_now_time_string() -> String {
     use std::time::SystemTime;
     let now = SystemTime::now();
-    let duration = now.duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default();
+    let duration = now
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default();
     let secs = duration.as_secs();
     // 粗略转换为本地/北京时间 (UTC+8)
     let total_secs = secs + 8 * 3600;
@@ -79,7 +87,11 @@ pub fn log_msg(source: &str, level: &str, message: &str) {
 
     if let Ok(guard) = LOG_FILE_PATH.lock() {
         if let Some(path) = guard.as_ref() {
-            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
                 let _ = f.write_all(line.as_bytes());
             }
         }
@@ -87,7 +99,10 @@ pub fn log_msg(source: &str, level: &str, message: &str) {
 }
 
 fn get_settings_path<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Option<std::path::PathBuf> {
-    app.path().app_config_dir().ok().map(|p| p.join("settings.json"))
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|p| p.join("settings.json"))
 }
 
 fn load_settings<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> AppSettings {
@@ -123,20 +138,23 @@ fn show_info_box(hwnd: *mut std::ffi::c_void, title: &str, text: &str) {
     let title_w = to_wide(title);
     let text_w = to_wide(text);
     unsafe {
-        MessageBoxW(hwnd as _, text_w.as_ptr(), title_w.as_ptr(), MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(
+            hwnd as _,
+            text_w.as_ptr(),
+            title_w.as_ptr(),
+            MB_OK | MB_ICONINFORMATION,
+        );
     }
 }
 
 #[cfg(target_os = "windows")]
 fn show_close_dialog_windows(hwnd: *mut std::ffi::c_void) -> Option<(CloseAction, bool)> {
     use windows_sys::Win32::UI::Controls::{
-        TaskDialogIndirect, TASKDIALOGCONFIG, TASKDIALOG_BUTTON,
-        TDCBF_CANCEL_BUTTON, TDCBF_OK_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION,
-        TDF_POSITION_RELATIVE_TO_WINDOW,
+        TaskDialogIndirect, TASKDIALOGCONFIG, TASKDIALOG_BUTTON, TDCBF_CANCEL_BUTTON,
+        TDCBF_OK_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION, TDF_POSITION_RELATIVE_TO_WINDOW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        MessageBoxW, IDOK, IDYES, IDNO,
-        MB_ICONQUESTION, MB_YESNOCANCEL,
+        MessageBoxW, IDNO, IDOK, IDYES, MB_ICONQUESTION, MB_YESNOCANCEL,
     };
 
     const RADIO_MINIMIZE: i32 = 101;
@@ -199,7 +217,8 @@ fn show_close_dialog_windows(hwnd: *mut std::ffi::c_void) -> Option<(CloseAction
             None
         }
     } else {
-        let prompt_text = to_wide("请选择操作：\n\n【是】最小化到系统托盘\n【否】直接退出程序\n【取消】返回窗口");
+        let prompt_text =
+            to_wide("请选择操作：\n\n【是】最小化到系统托盘\n【否】直接退出程序\n【取消】返回窗口");
         let result = unsafe {
             MessageBoxW(
                 hwnd as _,
@@ -216,7 +235,7 @@ fn show_close_dialog_windows(hwnd: *mut std::ffi::c_void) -> Option<(CloseAction
     }
 }
 
-fn handle_close_requested(window: &tauri::WebviewWindow) {
+fn handle_close_requested(window: &tauri::Window) {
     if IS_EXITING.load(Ordering::SeqCst) {
         return;
     }
@@ -227,7 +246,11 @@ fn handle_close_requested(window: &tauri::WebviewWindow) {
     if let Some(action) = settings.close_action {
         match action {
             CloseAction::MinimizeToTray => {
-                log_msg("Window", "INFO", "触发关闭事件，依据已保存的偏好最小化到系统托盘");
+                log_msg(
+                    "Window",
+                    "INFO",
+                    "触发关闭事件，依据已保存的偏好最小化到系统托盘",
+                );
                 let _ = window.hide();
             }
             CloseAction::ExitApp => {
@@ -295,7 +318,7 @@ fn send_windows_powershell_toast(title: &str, body: &str) -> Result<(), String> 
     let script = format!(
         r#"[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
 [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
-$template = @"
+$template = @'
 <toast>
     <visual>
         <binding template='ToastGeneric'>
@@ -304,7 +327,7 @@ $template = @"
         </binding>
     </visual>
 </toast>
-"@
+'@
 $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
 $xml.LoadXml($template)
 $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
@@ -315,7 +338,14 @@ $notifier.Show($toast)"#,
 
     let output = std::process::Command::new("powershell.exe")
         .creation_flags(CREATE_NO_WINDOW)
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
         .output()
         .map_err(|e| e.to_string())?;
 
@@ -338,7 +368,14 @@ fn trigger_desktop_notification<R: tauri::Runtime>(
     }
     let body_str = raw_body.as_str();
 
-    log_msg("Notify", "INFO", &format!("准备派发系统桌面通知 -> 标题: [{}], 内容: [{}]", title, body_str));
+    log_msg(
+        "Notify",
+        "INFO",
+        &format!(
+            "准备派发系统桌面通知 -> 标题: [{}], 内容: [{}]",
+            title, body_str
+        ),
+    );
 
     let mut builder = app.notification().builder().title(title);
     if !body_str.is_empty() {
@@ -348,11 +385,19 @@ fn trigger_desktop_notification<R: tauri::Runtime>(
     let mut success = false;
     match builder.show() {
         Ok(_) => {
-            log_msg("Notify", "INFO", "tauri-plugin-notification 派发成功 (使用 Muse 官方名称与图标)");
+            log_msg(
+                "Notify",
+                "INFO",
+                "tauri-plugin-notification 派发成功 (使用 Muse 官方名称与图标)",
+            );
             success = true;
         }
         Err(err) => {
-            log_msg("Notify", "WARN", &format!("tauri-plugin-notification 派发失败: {err}"));
+            log_msg(
+                "Notify",
+                "WARN",
+                &format!("tauri-plugin-notification 派发失败: {err}"),
+            );
             #[cfg(target_os = "windows")]
             {
                 log_msg("Notify", "INFO", "尝试使用系统通用 Toast 通道兜底发送...");
@@ -367,7 +412,11 @@ fn trigger_desktop_notification<R: tauri::Runtime>(
     }
 
     if !success {
-        log_msg("Notify", "ERROR", "系统未能成功弹出通知，请检查系统免打扰或通知中心设置");
+        log_msg(
+            "Notify",
+            "ERROR",
+            "系统未能成功弹出通知，请检查系统免打扰或通知中心设置",
+        );
     }
 }
 
@@ -381,10 +430,58 @@ fn log_from_web(level: String, message: String) {
     log_msg("Web", &level, &message);
 }
 
+const SHELL_COLLAPSED_HEIGHT: f64 = 48.0;
+const SHELL_EXPANDED_HEIGHT: f64 = 400.0;
+
+fn layout_webviews(window: &tauri::Window, shell_height: f64) -> Result<(), String> {
+    let size = window.inner_size().map_err(|e| e.to_string())?;
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let width = size.width as f64 / scale;
+    let height = size.height as f64 / scale;
+    let bar_height = shell_height.min(height);
+    let main = window.get_webview("main").ok_or("主 WebView 不存在")?;
+    let shell = window.get_webview("shell").ok_or("底栏 WebView 不存在")?;
+    main.set_bounds(tauri::Rect {
+        position: tauri::LogicalPosition::new(0.0, 0.0).into(),
+        size: tauri::LogicalSize::new(width, height - bar_height).into(),
+    })
+    .map_err(|e| e.to_string())?;
+    shell
+        .set_bounds(tauri::Rect {
+            position: tauri::LogicalPosition::new(0.0, height - bar_height).into(),
+            size: tauri::LogicalSize::new(width, bar_height).into(),
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+struct ShellHeight(Mutex<f64>);
+
+#[tauri::command]
+fn resize_shell_bar(
+    webview: tauri::Webview,
+    expanded: bool,
+    state: tauri::State<'_, ShellHeight>,
+) -> Result<(), String> {
+    if webview.label() != "shell" {
+        return Err("无权调整底栏".into());
+    }
+    let height = if expanded {
+        SHELL_EXPANDED_HEIGHT
+    } else {
+        SHELL_COLLAPSED_HEIGHT
+    };
+    let mut current = state.0.lock().map_err(|e| e.to_string())?;
+    layout_webviews(&webview.window(), height)?;
+    *current = height;
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
+        .manage(ShellHeight(Mutex::new(SHELL_COLLAPSED_HEIGHT)))
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![push_desktop_notification, log_from_web])
+        .invoke_handler(tauri::generate_handler![push_desktop_notification, log_from_web, resize_shell_bar, shell_settings::get_shell_info, shell_settings::set_autostart, browser_cache::clear_browser_cache, update_check::check_updates])
         .setup(|app| {
             init_logger(app.handle());
 
@@ -415,7 +512,7 @@ fn main() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
-                        if let Some(window) = app.get_webview_window("main") {
+                        if let Some(window) = app.get_window("main") {
                             let _ = window.show();
                             let _ = window.unminimize();
                             let _ = window.set_focus();
@@ -447,7 +544,7 @@ fn main() {
                         log_msg("Tray", "INFO", "已重置关闭提示偏好");
                         #[cfg(target_os = "windows")]
                         {
-                            let hwnd = if let Some(w) = app.get_webview_window("main") {
+                            let hwnd = if let Some(w) = app.get_window("main") {
                                 w.hwnd().map(|h| h.0 as *mut std::ffi::c_void).unwrap_or(std::ptr::null_mut())
                             } else {
                                 std::ptr::null_mut()
@@ -470,7 +567,7 @@ fn main() {
                     } = event
                     {
                         let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
+                        if let Some(window) = app.get_window("main") {
                             let _ = window.show();
                             let _ = window.unminimize();
                             let _ = window.set_focus();
@@ -495,26 +592,48 @@ fn main() {
                 }
             });
 
-            // 动态构建主 WebView 窗口并注入通知拦截脚本与后台防挂起参数
+            // 远程网页与本地底栏使用独立 WebView，共享原生窗口。
             let url: tauri::Url = "https://muse.ai".parse().expect("有效的主站 URL");
-            let window = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::External(url))
+            let window = tauri::window::WindowBuilder::new(app, "main")
                 .title("Muse")
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(900.0, 600.0)
                 .center()
                 .resizable(true)
-                .devtools(true)
-                .additional_browser_args("--disable-background-timer-throttling --disable-backgrounding-occluded-windows")
-                .initialization_script(include_str!("inject.js"))
                 .build()?;
+            window.add_child(
+                tauri::webview::WebviewBuilder::new("main", tauri::WebviewUrl::External(url))
+                    .devtools(true)
+                    .additional_browser_args("--disable-background-timer-throttling --disable-backgrounding-occluded-windows")
+                    .initialization_script(include_str!("inject.js")),
+                tauri::LogicalPosition::new(0.0, 0.0),
+                tauri::LogicalSize::new(1280.0, 812.0),
+            )?;
+            window.add_child(
+                tauri::webview::WebviewBuilder::new("shell", tauri::WebviewUrl::App("index.html".into()))
+                    .additional_browser_args("--disable-background-timer-throttling --disable-backgrounding-occluded-windows")
+                    .on_navigation(|url| matches!(url.scheme(), "tauri" | "asset") || (url.scheme() == "http" && url.host_str() == Some("tauri.localhost"))),
+                tauri::LogicalPosition::new(0.0, 812.0),
+                tauri::LogicalSize::new(1280.0, SHELL_COLLAPSED_HEIGHT),
+            )?;
+            layout_webviews(&window, SHELL_COLLAPSED_HEIGHT).map_err(std::io::Error::other)?;
 
             let win_clone = window.clone();
             window.on_window_event(move |event| {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    if !IS_EXITING.load(Ordering::SeqCst) {
+                match event {
+                    tauri::WindowEvent::CloseRequested { api, .. } if !IS_EXITING.load(Ordering::SeqCst) => {
                         api.prevent_close();
                         handle_close_requested(&win_clone);
                     }
+                    tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                        let state = win_clone.state::<ShellHeight>();
+                        if let Ok(height) = state.0.lock() {
+                            if let Err(error) = layout_webviews(&win_clone, *height) {
+                                log_msg("Window", "ERROR", &format!("调整 WebView 布局失败: {error}"));
+                            }
+                        };
+                    }
+                    _ => {}
                 }
             });
 

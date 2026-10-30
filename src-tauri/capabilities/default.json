@@ -2,11 +2,11 @@
   "$schema": "https://schema.tauri.app/config/2/capability",
   "identifier": "default",
   "description": "Allow muse.ai to send desktop notifications",
-  "local": true,
+  "local": false,
   "remote": {
     "urls": ["https://muse.ai", "https://muse.ai/*", "https://*.muse.ai/*"]
   },
-  "windows": ["main"],
+  "webviews": ["main"],
   "permissions": [
     "core:event:default"
   ]

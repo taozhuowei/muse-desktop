@@ -6,7 +6,28 @@
   window.__MUSE_NOTIFICATION_INJECTED__ = true;
 
   // ==========================================
-  // 日志桥接通道：向 Rust 后端与本地日志文件同步
+  // 1. 应用启动基准与全局防护策略
+  // 核心原则：只推送打开应用之后产生的新通知，打开前的历史通知一律不推送
+  // ==========================================
+  const APP_START_TIME = Date.now();
+  // 启动静默基线期（15秒）：页面加载、鉴权、路由跳转、拉取历史未读和渲染历史DOM需要时间，此期间只建基线不发弹窗
+  const INITIAL_SYNC_WINDOW_MS = 15000;
+  // 突发洪峰判定窗口（1.5秒内超过2条则判定为历史数据/列表批量重绘，自动抑制）
+  const BURST_WINDOW_MS = 1500;
+  const MAX_BURST_COUNT = 2;
+  // 通知去重防抖窗口（8秒）
+  const DEDUPE_WINDOW_MS = 8000;
+
+  // 状态基线集合
+  const seenBaselineKeys = new Set();
+  const seenNotificationIds = new Set();
+  const seenTaskIds = new Set();
+  const recentDedupeMap = new Map();
+  const recentBurstTimestamps = [];
+  let isNotificationsInitialized = false;
+
+  // ==========================================
+  // 2. 日志桥接通道：向 Rust 后端与本地日志文件同步
   // ==========================================
   function logToRust(level, message) {
     const text = typeof message === 'object' ? JSON.stringify(message) : String(message);
@@ -29,26 +50,35 @@
     } catch (_) {}
   }
 
-  logToRust('INFO', '前端注入脚本 inject.js 初始化成功，当前 URL: ' + window.location.href);
+  logToRust('INFO', `前端注入脚本 inject.js 初始化就绪，当前 URL: ${window.location.href}，启动时间戳: ${APP_START_TIME}`);
 
-  // 最近发送的通知哈希集合，用于防抖去重（保留 8 秒）
-  const recentMap = new Map();
-  const DEDUPE_WINDOW_MS = 8000;
+  setTimeout(() => {
+    logToRust('INFO', '应用初始历史数据同步期已结束（15s），已切换至【实时新通知监听模式】');
+  }, INITIAL_SYNC_WINDOW_MS);
 
   function cleanOldCache() {
     const now = Date.now();
-    for (const [key, timestamp] of recentMap.entries()) {
+    for (const [key, timestamp] of recentDedupeMap.entries()) {
       if (now - timestamp > DEDUPE_WINDOW_MS) {
-        recentMap.delete(key);
+        recentDedupeMap.delete(key);
       }
     }
   }
 
-  // 页面刚加载的前 5 秒为静默初始化期，避免页面初始加载历史消息时造成刷屏
-  const STARTUP_TIME = Date.now();
-  const STARTUP_SILENCE_MS = 5000;
+  // 提取通用时间戳并转换为毫秒时间戳
+  function extractTimestamp(item) {
+    if (!item || typeof item !== 'object') return null;
+    const raw = item.created_at || item.createdAt || item.timestamp || item.time || item.date || item.updated_at || item.updatedAt;
+    if (!raw) return null;
+    if (typeof raw === 'number') {
+      return raw < 1e11 ? raw * 1000 : raw;
+    }
+    const parsed = Date.parse(raw);
+    return isNaN(parsed) ? null : parsed;
+  }
 
-  function emitNotification(rawTitle, rawBody, source = '未知来源') {
+  // 核心派发网关：严格执行历史过滤与突发抑制
+  function emitNotification(rawTitle, rawBody, source = '未知来源', options = {}) {
     cleanOldCache();
 
     let title = (rawTitle || '').toString().trim();
@@ -60,26 +90,54 @@
       return;
     }
 
-    // 去重键
-    const key = `${title}:::${body}`;
+    const itemKey = `${title}:::${body}`;
     const now = Date.now();
-    if (recentMap.has(key) && now - recentMap.get(key) < DEDUPE_WINDOW_MS) {
-      logToRust('DEBUG', `[${source}] 命中 8 秒防抖去重，忽略重复通知: ${title}`);
-      return;
-    }
-    recentMap.set(key, now);
 
-    // 如果处于刚打开网页的静默保护期且来源是 DOM 批量加载历史消息，只记录指纹不弹窗
-    if (Date.now() - STARTUP_TIME < STARTUP_SILENCE_MS && source === 'DomToast') {
-      logToRust('DEBUG', `[${source}] 处于初始加载静默保护期，跳过历史消息弹窗: ${title}`);
-      return;
+    // 1. 显式时间戳比对：如果消息携带创建/发生时间且早于打开应用时刻，直接丢弃
+    if (options.timestamp && typeof options.timestamp === 'number') {
+      if (options.timestamp < APP_START_TIME) {
+        logToRust('DEBUG', `[${source}] 拦截到早于打开应用的历史通知 (时间: ${new Date(options.timestamp).toLocaleTimeString()})，已丢弃: [${title}]`);
+        return;
+      }
     }
 
-    logToRust('INFO', `[${source}] 成功捕获通知 -> 标题: [${title}], 内容: [${body}]`);
+    // 2. 启动静默基线期（前15秒）：只记录历史基线指纹，不弹窗
+    if (now - APP_START_TIME < INITIAL_SYNC_WINDOW_MS && !options.force) {
+      seenBaselineKeys.add(itemKey);
+      logToRust('DEBUG', `[${source}] 处于启动初始同步期，已收录历史基线，不弹窗: [${title}]`);
+      return;
+    }
+
+    // 3. 已知历史基线匹配：如果此消息在启动初期已存在，不重复推送
+    if (seenBaselineKeys.has(itemKey)) {
+      logToRust('DEBUG', `[${source}] 命中启动前已存在的历史基线记录，忽略: [${title}]`);
+      return;
+    }
+
+    // 4. 突发洪峰抑制保护：短时间内连续涌入多条必为历史列表批量渲染或页面重绘
+    recentBurstTimestamps.push(now);
+    while (recentBurstTimestamps.length > 0 && now - recentBurstTimestamps[0] > BURST_WINDOW_MS) {
+      recentBurstTimestamps.shift();
+    }
+    if (recentBurstTimestamps.length > MAX_BURST_COUNT) {
+      seenBaselineKeys.add(itemKey);
+      logToRust('WARN', `[${source}] 1.5秒内连续涌入第 ${recentBurstTimestamps.length} 条通知，判定为历史数据批量加载/页面重绘，已自动抑制: [${title}]`);
+      return;
+    }
+
+    // 5. 8秒防抖去重
+    if (recentDedupeMap.has(itemKey) && now - recentDedupeMap.get(itemKey) < DEDUPE_WINDOW_MS) {
+      logToRust('DEBUG', `[${source}] 命中 8 秒防抖去重，忽略重复通知: [${title}]`);
+      return;
+    }
+    recentDedupeMap.set(itemKey, now);
+    seenBaselineKeys.add(itemKey);
+
+    logToRust('INFO', `[${source}] 捕获到应用启动后实时新通知 -> 标题: [${title}], 内容: [${body}]`);
 
     const payload = { title, body: body || undefined };
 
-    // 双通道尝试发送给 Rust
+    // 双通道尝试发送给 Rust 后端
     let delivered = false;
     try {
       if (window.__TAURI__?.event?.emit) {
@@ -114,7 +172,7 @@
   }
 
   // ==========================================
-  // 1. 劫持 Web 标准 window.Notification
+  // 3. 劫持 Web 标准 window.Notification
   // ==========================================
   try {
     const OriginalNotification = window.Notification;
@@ -122,7 +180,9 @@
     function CustomNotification(title, options = {}) {
       const body = options.body || options.description || '';
       logToRust('INFO', `网页代码调用了 new Notification('${title}', ${JSON.stringify(options)})`);
-      emitNotification(title, body, 'WebNotification');
+      emitNotification(title, body, 'WebNotification', {
+        timestamp: options.timestamp || Date.now()
+      });
 
       const dummy = {
         title,
@@ -168,14 +228,16 @@
   }
 
   // ==========================================
-  // 2. 劫持 WebSocket 消息推流
+  // 4. 劫持 WebSocket 实时推流
   // ==========================================
   try {
     const OriginalWebSocket = window.WebSocket;
     if (OriginalWebSocket) {
       window.WebSocket = function (...args) {
         const ws = new OriginalWebSocket(...args);
-        logToRust('INFO', 'WebSocket 连接建立: ' + (args[0] || ''));
+        const wsUrl = args[0] || '';
+        const wsOpenTime = Date.now();
+        logToRust('INFO', 'WebSocket 连接建立: ' + wsUrl);
 
         ws.addEventListener('message', function (event) {
           try {
@@ -183,6 +245,12 @@
               const text = event.data.trim();
               if (text.startsWith('{') && text.endsWith('}')) {
                 const data = JSON.parse(text);
+
+                // 提取时间戳
+                const itemTime = extractTimestamp(data);
+                // 连接建立前 3 秒收到的全量同步消息归入历史基线
+                const isConnectionInitialSync = (Date.now() - wsOpenTime) < 3000;
+
                 const isNotify =
                   data.type === 'notification' ||
                   data.event === 'notification' ||
@@ -196,7 +264,10 @@
                   const title = data.title || data.header || data.event || 'Muse 通知';
                   const body = data.message || data.body || data.text || data.description || (data.status ? `状态：${data.status}` : '');
                   if (title || body) {
-                    emitNotification(title, body, 'WebSocket');
+                    emitNotification(title, body, 'WebSocket', {
+                      timestamp: itemTime,
+                      force: !isConnectionInitialSync
+                    });
                   }
                 }
               }
@@ -218,7 +289,7 @@
   }
 
   // ==========================================
-  // 3. 劫持 fetch 接口响应 (捕获异步任务状态完成)
+  // 5. 劫持 fetch 接口响应 (过滤历史未读列表与历史完成任务)
   // ==========================================
   try {
     const originalFetch = window.fetch;
@@ -227,21 +298,56 @@
         const response = await originalFetch.apply(this, args);
         try {
           const url = (typeof args[0] === 'string' ? args[0] : args[0]?.url) || '';
-          // 仅关注 API 请求
           if (url.includes('/api/') || url.includes('notification') || url.includes('video') || url.includes('task')) {
             const clone = response.clone();
             clone.json().then(data => {
-              if (data && typeof data === 'object') {
-                if (data.status === 'completed' || data.status === 'ready' || data.state === 'finished') {
-                  const title = data.title || data.name || 'Muse 任务已完成';
-                  const body = data.message || data.description || '您的视频或任务已处理完毕';
-                  emitNotification(title, body, 'FetchAPI');
-                } else if (Array.isArray(data.notifications)) {
+              if (!data || typeof data !== 'object') return;
+
+              // 场景 A: 获取通知列表 (data.notifications)
+              if (Array.isArray(data.notifications)) {
+                if (!isNotificationsInitialized || (Date.now() - APP_START_TIME < INITIAL_SYNC_WINDOW_MS)) {
+                  // 首次拉取或启动期内拉取的全为用户离线期间累积的历史通知，全量建立历史基线，不发弹窗
                   for (const n of data.notifications) {
-                    if (n.unread || n.is_new) {
-                      emitNotification(n.title || 'Muse 通知', n.body || n.message || '', 'FetchNotifications');
+                    const id = n.id || n._id || n.uuid || `${n.title}:${n.created_at || n.message}`;
+                    seenNotificationIds.add(id);
+                    if (n.title || n.body || n.message) {
+                      seenBaselineKeys.add(`${(n.title || 'Muse 通知').trim()}:::${(n.body || n.message || '').trim()}`);
                     }
                   }
+                  isNotificationsInitialized = true;
+                  logToRust('INFO', `[FetchNotifications] 首次加载发现 ${data.notifications.length} 条通知，已收录为历史基线，不向桌面推送`);
+                } else {
+                  // 启动后后续增量请求：仅推送未在基线中且生成时间在启动之后的新增通知
+                  for (const n of data.notifications) {
+                    const id = n.id || n._id || n.uuid || `${n.title}:${n.created_at || n.message}`;
+                    if (!seenNotificationIds.has(id)) {
+                      seenNotificationIds.add(id);
+                      const timestamp = extractTimestamp(n);
+                      emitNotification(n.title || 'Muse 通知', n.body || n.message || '', 'FetchNotifications', { timestamp });
+                    }
+                  }
+                }
+                return;
+              }
+
+              // 场景 B: 异步任务状态响应 (status === 'completed' / 'ready')
+              if (data.status === 'completed' || data.status === 'ready' || data.state === 'finished') {
+                const taskId = data.id || data.task_id || data.video_id || data.uuid || `${data.title || data.name}`;
+                const taskTime = extractTimestamp(data);
+
+                // 如果处于启动期（前15秒），此时查出来的必然是打开应用前就已完成的历史任务，仅建立基线
+                if (Date.now() - APP_START_TIME < INITIAL_SYNC_WINDOW_MS) {
+                  seenTaskIds.add(taskId);
+                  logToRust('DEBUG', `[FetchAPI] 启动期收录已存在的完成任务基线: ${taskId}`);
+                  return;
+                }
+
+                // 启动稳定后，如果是首次出现且创建/更新时间在启动之后的任务，才进行推送
+                if (!seenTaskIds.has(taskId)) {
+                  seenTaskIds.add(taskId);
+                  const title = data.title || data.name || 'Muse 任务已完成';
+                  const body = data.message || data.description || '您的视频或任务已处理完毕';
+                  emitNotification(title, body, 'FetchAPI', { timestamp: taskTime });
                 }
               }
             }).catch(() => {});
@@ -256,22 +362,27 @@
   }
 
   // ==========================================
-  // 4. 监听 document.title 变化 (后台任务完成后修改标题)
+  // 6. 监听 document.title 变化 (仅未读数递增时提醒)
   // ==========================================
   try {
-    let lastTitle = document.title;
+    let lastUnreadCount = 0;
+    const initialMatch = (document.title || '').trim().match(/^\((\d+)\)/);
+    if (initialMatch) {
+      lastUnreadCount = parseInt(initialMatch[1], 10) || 0;
+      logToRust('INFO', `初始化网页未读数基线为: ${lastUnreadCount}`);
+    }
+
     const titleObserver = new MutationObserver(() => {
-      const currentTitle = document.title;
-      if (currentTitle !== lastTitle) {
-        const trimmed = currentTitle.trim();
-        // 匹配常见带有未读计数或完成标识的标题: "(1)", "[Done]", "Ready", "Completed"
-        const countMatch = trimmed.match(/^\((\d+)\)/);
-        if (countMatch && parseInt(countMatch[1], 10) > 0) {
-          emitNotification('Muse 新提醒', `您有 ${countMatch[1]} 条新消息：${trimmed}`, 'TitleObserver');
-        } else if (/ready|complete|finished|完成|就绪/i.test(trimmed)) {
-          emitNotification('Muse 任务状态更新', trimmed, 'TitleObserver');
+      const currentTitle = (document.title || '').trim();
+      const countMatch = currentTitle.match(/^\((\d+)\)/);
+      if (countMatch) {
+        const currentCount = parseInt(countMatch[1], 10) || 0;
+        // 仅在启动静默期后且未读数增长时才提醒
+        if (Date.now() - APP_START_TIME >= INITIAL_SYNC_WINDOW_MS && currentCount > lastUnreadCount) {
+          const delta = currentCount - lastUnreadCount;
+          emitNotification('Muse 新提醒', `您收到了 ${delta} 条新消息`, 'TitleObserver');
         }
-        lastTitle = currentTitle;
+        lastUnreadCount = currentCount;
       }
     });
 
@@ -284,7 +395,7 @@
   }
 
   // ==========================================
-  // 5. 监听 DOM 树中的站内弹窗与 Toast (MutationObserver)
+  // 7. 监听 DOM 树中的站内独立浮动 Toast (排除历史对话流与常规卡片)
   // ==========================================
   function setupDomObserver() {
     if (!document.body) {
@@ -292,7 +403,8 @@
       return;
     }
 
-    const toastClassPatterns = /toast|notification|alert|snackbar|notice|banner|message-popup|status-badge|popover/i;
+    // 仅精准匹配专用的浮动 Toast / Snackbar 容器类名
+    const strictToastClassPatterns = /\b(toast|toaster|snackbar|notification-toast|alert-toast|toast-popup)\b/i;
 
     function inspectNode(node) {
       if (!node || node.nodeType !== 1) return;
@@ -302,18 +414,21 @@
         return;
       }
 
+      // 关键排除：绝对不能从普通聊天流、历史会话、日志查看器或常规卡片列表中抓取通知
+      if (node.closest('main, article, [role="feed"], [role="log"], [role="list"], .chat, .message, .timeline, .history, .feed, [class*="chat"], [class*="message"], [class*="timeline"], [class*="history"], [class*="conversation"]')) {
+        return;
+      }
+
       const role = node.getAttribute('role');
       const ariaLive = node.getAttribute('aria-live');
       const className = typeof node.className === 'string' ? node.className : '';
 
+      // 仅当属于专用浮动 Toast，或显式标记为 data-toast/data-notification 时才处理
       const isToastMatch =
-        role === 'alert' ||
-        role === 'status' ||
-        ariaLive === 'assertive' ||
-        ariaLive === 'polite' ||
-        toastClassPatterns.test(className) ||
+        node.hasAttribute('data-toast') ||
         node.hasAttribute('data-notification') ||
-        node.hasAttribute('data-toast');
+        strictToastClassPatterns.test(className) ||
+        ((role === 'alert' || ariaLive === 'assertive') && (node.closest('[class*="toast"], [class*="snackbar"], [class*="toaster"]') !== null));
 
       if (isToastMatch) {
         const text = (node.innerText || node.textContent || '').trim();
@@ -341,7 +456,7 @@
         for (const addedNode of mutation.addedNodes) {
           inspectNode(addedNode);
           if (addedNode.querySelectorAll) {
-            const children = addedNode.querySelectorAll('[role="alert"], [role="status"], [class*="toast"], [class*="notification"], [class*="alert"]');
+            const children = addedNode.querySelectorAll('[data-toast], [data-notification], [class*="toast"], [class*="snackbar"]');
             children.forEach(inspectNode);
           }
         }
@@ -353,7 +468,7 @@
       subtree: true
     });
 
-    logToRust('INFO', 'DOM 提示与 Toast 观测器 (MutationObserver) 启动完成');
+    logToRust('INFO', 'DOM 独立浮动 Toast 观测器 (MutationObserver) 启动完成');
   }
 
   setupDomObserver();

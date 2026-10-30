@@ -1,0 +1,8 @@
+{
+  "$schema": "https://schema.tauri.app/config/2/capability",
+  "identifier": "shell",
+  "description": "Permissions for the local shell webview",
+  "local": true,
+  "webviews": ["shell"],
+  "permissions": ["core:event:default"]
+}

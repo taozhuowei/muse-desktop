@@ -1,0 +1,269 @@
+:root {
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  color: #1e293b;
+  background: #ffffff;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  user-select: none;
+  background: #ffffff;
+}
+
+button, input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled, input:disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  background: #ffffff;
+}
+
+/* 底部常驻栏：纯白极简现代 */
+.bar {
+  height: 40px;
+  min-height: 40px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: #ffffff;
+  border-top: 1px solid #e5e7eb;
+  z-index: 10;
+}
+
+.brand {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 13px;
+  color: #0f172a;
+  white-space: nowrap;
+}
+
+.brand-mark {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #3b82f6, #6366f1);
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.4);
+  flex: none;
+}
+
+.version {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 500;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  padding: 1px 7px;
+  border-radius: 9999px;
+  margin-left: 2px;
+}
+
+.icon-button {
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  flex: none;
+  color: #64748b;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  transition: all .15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-button:hover,
+.icon-button[aria-expanded="true"] {
+  color: #0f172a;
+  background: #f1f5f9;
+}
+
+.icon-button svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* 浮动展开设置面板：纯白卡片设计 */
+.panel {
+  width: min(100%, 420px);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  align-self: flex-end;
+  padding: 18px 20px 14px;
+  background: #ffffff;
+  border-left: 1px solid #e5e7eb;
+  border-top: 1px solid #e5e7eb;
+  border-radius: 12px 0 0 0;
+  box-shadow: -4px -4px 20px rgba(0, 0, 0, 0.04);
+  z-index: 9;
+}
+
+.panel[hidden] {
+  display: none;
+}
+
+.panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding-bottom: 12px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #0f172a;
+  line-height: 1.3;
+}
+
+p {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.setting-row {
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid #f1f5f9;
+}
+
+.setting-row > div {
+  min-width: 0;
+}
+
+.setting-label,
+label {
+  font-weight: 600;
+  font-size: 13px;
+  color: #1e293b;
+}
+
+/* 操作按钮：浅色质感 */
+.action-button {
+  flex: none;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #334155;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  transition: all .15s ease;
+}
+
+.action-button:hover:not(:disabled) {
+  background: #f8fafc;
+  border-color: #94a3b8;
+  color: #0f172a;
+}
+
+.action-button:active:not(:disabled) {
+  background: #f1f5f9;
+  transform: scale(0.98);
+}
+
+/* 优雅 iOS/Fluent 风格 Switch 开关 */
+.switch {
+  appearance: none;
+  width: 40px;
+  height: 22px;
+  flex: none;
+  margin: 0;
+  border: none;
+  border-radius: 11px;
+  background: #e2e8f0;
+  position: relative;
+  cursor: pointer;
+  transition: background-color .2s ease;
+}
+
+.switch::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  transition: transform .2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.switch:checked {
+  background: #2563eb;
+}
+
+.switch:checked::before {
+  transform: translateX(18px);
+}
+
+/* 状态提示文字 */
+.status {
+  min-height: 18px;
+  margin: 12px 0 2px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #059669;
+  overflow-wrap: anywhere;
+  transition: color .15s ease;
+}
+
+.status.error {
+  color: #dc2626;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch, .switch::before, .action-button, .icon-button {
+    transition: none !important;
+  }
+}
