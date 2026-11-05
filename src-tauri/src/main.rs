@@ -50,6 +50,11 @@ pub struct LogPayload {
     pub message: String,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct OpenExternalPayload {
+    pub url: String,
+}
+
 fn init_logger<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     if let Ok(dir) = app.path().app_data_dir() {
         let _ = std::fs::create_dir_all(&dir);
@@ -125,6 +130,85 @@ fn save_settings<R: tauri::Runtime>(app: &tauri::AppHandle<R>, settings: &AppSet
             let _ = std::fs::write(&path, json);
         }
     }
+}
+
+static LAST_OPENED_URL: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+
+pub fn open_in_browser(url: &str) {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    if !trimmed.starts_with("http://") && !trimmed.starts_with("https://") {
+        log_msg("Browser", "WARN", &format!("拒绝打开非 HTTP/HTTPS 链接: {trimmed}"));
+        return;
+    }
+
+    // 防抖与重复打开过滤：800ms 内相同的 URL 不重复打开
+    if let Ok(mut guard) = LAST_OPENED_URL.lock() {
+        let now = std::time::Instant::now();
+        if let Some((last_url, last_time)) = guard.as_ref() {
+            if last_url == trimmed && now.duration_since(*last_time).as_millis() < 800 {
+                log_msg("Browser", "DEBUG", &format!("忽略 800ms 内重复请求的外部链接: {trimmed}"));
+                return;
+            }
+        }
+        *guard = Some((trimmed.to_string(), now));
+    }
+
+    log_msg("Browser", "INFO", &format!("在系统默认浏览器中打开链接: {trimmed}"));
+
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let operation = to_wide("open");
+        let target = to_wide(trimmed);
+        unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                operation.as_ptr(),
+                target.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            );
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(trimmed).spawn();
+    }
+}
+
+fn is_internal_url(url: &tauri::Url) -> bool {
+    let scheme = url.scheme();
+    if matches!(scheme, "tauri" | "asset" | "about" | "data" | "blob") {
+        return true;
+    }
+    if let Some(host) = url.host_str() {
+        if host == "muse.ai" || host.ends_with(".muse.ai") {
+            return true;
+        }
+        if host == "localhost" || host == "127.0.0.1" {
+            return true;
+        }
+        // 允许常见 OAuth 授权域在内部 WebView 完成登录跳转
+        if host == "accounts.google.com"
+            || host.ends_with(".accounts.google.com")
+            || host == "appleid.apple.com"
+            || host == "login.microsoftonline.com"
+        {
+            return true;
+        }
+    }
+    false
+}
+
+#[tauri::command]
+fn open_external_url(url: String) {
+    open_in_browser(&url);
 }
 
 #[cfg(target_os = "windows")]
@@ -481,7 +565,7 @@ fn main() {
     tauri::Builder::default()
         .manage(ShellHeight(Mutex::new(SHELL_COLLAPSED_HEIGHT)))
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![push_desktop_notification, log_from_web, resize_shell_bar, shell_settings::get_shell_info, shell_settings::set_autostart, browser_cache::clear_browser_cache, update_check::check_updates])
+        .invoke_handler(tauri::generate_handler![push_desktop_notification, log_from_web, open_external_url, resize_shell_bar, shell_settings::get_shell_info, shell_settings::set_autostart, browser_cache::clear_browser_cache, update_check::check_updates])
         .setup(|app| {
             init_logger(app.handle());
 
@@ -592,6 +676,13 @@ fn main() {
                 }
             });
 
+            // 注册外部链接打开事件监听器
+            app.listen("muse-open-external", move |event| {
+                if let Ok(payload) = serde_json::from_str::<OpenExternalPayload>(event.payload()) {
+                    open_in_browser(&payload.url);
+                }
+            });
+
             // 远程网页与本地底栏使用独立 WebView，共享原生窗口。
             let url: tauri::Url = "https://muse.ai".parse().expect("有效的主站 URL");
             let window = tauri::window::WindowBuilder::new(app, "main")
@@ -605,7 +696,21 @@ fn main() {
                 tauri::webview::WebviewBuilder::new("main", tauri::WebviewUrl::External(url))
                     .devtools(true)
                     .additional_browser_args("--disable-background-timer-throttling --disable-backgrounding-occluded-windows")
-                    .initialization_script(include_str!("inject.js")),
+                    .initialization_script(include_str!("inject.js"))
+                    .on_new_window(move |url, _features| {
+                        let url_str = url.as_str();
+                        log_msg("Webview", "INFO", &format!("拦截到新窗口请求: {url_str}"));
+                        open_in_browser(url_str);
+                        tauri::webview::NewWindowResponse::Deny
+                    })
+                    .on_navigation(move |url| {
+                        if is_internal_url(url) {
+                            return true;
+                        }
+                        log_msg("Webview", "INFO", &format!("拦截到外部页面导航: {url}"));
+                        open_in_browser(url.as_str());
+                        false
+                    }),
                 tauri::LogicalPosition::new(0.0, 0.0),
                 tauri::LogicalSize::new(1280.0, 812.0),
             )?;

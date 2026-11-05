@@ -472,4 +472,137 @@
   }
 
   setupDomObserver();
+
+  // ==========================================
+  // 8. 外部链接与新窗口链接拦截：在本地外部默认浏览器打开
+  // ==========================================
+  function openExternalUrl(url) {
+    if (!url || typeof url !== 'string') return;
+    const trimmed = url.trim();
+    if (!/^https?:\/\//i.test(trimmed)) return;
+
+    logToRust('INFO', '通过注入通道请求在外部浏览器打开链接: ' + trimmed);
+
+    try {
+      if (window.__TAURI__?.event?.emit) {
+        window.__TAURI__.event.emit('muse-open-external', { url: trimmed });
+        return;
+      }
+    } catch (_) {}
+
+    try {
+      if (window.__TAURI_INTERNALS__?.invoke) {
+        window.__TAURI_INTERNALS__.invoke('open_external_url', { url: trimmed });
+        return;
+      }
+    } catch (_) {}
+
+    try {
+      if (window.__TAURI_INTERNALS__?.postMessage) {
+        window.__TAURI_INTERNALS__.postMessage(JSON.stringify({ cmd: 'open_external_url', url: trimmed }));
+      }
+    } catch (_) {}
+  }
+
+  function shouldOpenInExternalBrowser(anchor) {
+    if (!anchor || !anchor.href) return false;
+    const rawHref = anchor.getAttribute('href') || anchor.href;
+    if (!rawHref || rawHref.startsWith('#') || rawHref.startsWith('javascript:')) {
+      return false;
+    }
+
+    try {
+      const parsed = new URL(anchor.href, window.location.href);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        return false;
+      }
+
+      const host = parsed.hostname.toLowerCase();
+      const isInternalHost = host === 'muse.ai' || host.endsWith('.muse.ai') || host === 'localhost' || host === '127.0.0.1';
+
+      // 1. 所有非 muse.ai 的外部链接（如 GitHub、Google、第三方网址等）
+      if (!isInternalHost) {
+        return true;
+      }
+
+      // 2. 带有新窗口标记 target="_blank" 的链接
+      const target = (anchor.getAttribute('target') || '').trim().toLowerCase();
+      if (target === '_blank' || target === '_new') {
+        return true;
+      }
+
+      // 3. 处于聊天流、AI 回复消息容器内的链接
+      const inChatContext = !!anchor.closest(
+        '.message, [class*="message"], .chat, [class*="chat"], article, [data-message-id], [class*="markdown"], [class*="prose"]'
+      );
+      if (inChatContext) {
+        if (parsed.pathname !== window.location.pathname || parsed.search !== window.location.search) {
+          return true;
+        }
+      }
+
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // 1. 全局捕获阶段拦截点击事件
+  window.addEventListener(
+    'click',
+    function (event) {
+      if (event.button !== 0) return; // 仅响应鼠标左键点击
+
+      const path = event.composedPath ? event.composedPath() : [];
+      let anchor = null;
+      for (const el of path) {
+        if (el && el.tagName === 'A' && el.href) {
+          anchor = el;
+          break;
+        }
+      }
+      if (!anchor && event.target && event.target.closest) {
+        anchor = event.target.closest('a[href]');
+      }
+
+      if (!anchor) return;
+
+      if (shouldOpenInExternalBrowser(anchor)) {
+        event.preventDefault();
+        event.stopPropagation();
+        openExternalUrl(anchor.href);
+      }
+    },
+    true
+  );
+
+  // 2. 劫持全局 window.open，确保通过脚本弹出的外链同样在外部默认浏览器打开
+  try {
+    const originalWindowOpen = window.open;
+    window.open = function (url, target, features) {
+      if (url && typeof url === 'string') {
+        try {
+          const parsed = new URL(url, window.location.href);
+          const host = parsed.hostname.toLowerCase();
+          const isInternalHost = host === 'muse.ai' || host.endsWith('.muse.ai') || host === 'localhost' || host === '127.0.0.1';
+          const isHttp = parsed.protocol === 'http:' || parsed.protocol === 'https:';
+
+          if (isHttp && (!isInternalHost || target === '_blank' || target === '_new')) {
+            openExternalUrl(parsed.href);
+            return {
+              closed: false,
+              close: function () {},
+              focus: function () {},
+              blur: function () {},
+              postMessage: function () {}
+            };
+          }
+        } catch (_) {}
+      }
+      return originalWindowOpen.call(window, url, target, features);
+    };
+    logToRust('INFO', '全局 window.open 代理已就绪');
+  } catch (err) {
+    logToRust('ERROR', '代理 window.open 失败: ' + err.message);
+  }
 })();

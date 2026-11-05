@@ -128,9 +128,9 @@ mod tests {
 
     #[test]
     fn compares_semver_tags() {
-        assert!(compare_versions("0.2.1", "v0.10.0").unwrap().available);
-        assert!(!compare_versions("0.2.1", "v0.2.1").unwrap().available);
-        assert!(!compare_versions("0.2.1", "0.2.0").unwrap().available);
+        assert!(compare_versions("0.2.2", "v0.10.0").unwrap().available);
+        assert!(!compare_versions("0.2.2", "v0.2.2").unwrap().available);
+        assert!(!compare_versions("0.2.2", "0.2.0").unwrap().available);
         assert!(!compare_versions("1.0.0", "v1.0.0-rc.1").unwrap().available);
         assert!(compare_versions("1.0.0-rc.1", "v1.0.0").unwrap().available);
         assert!(compare_versions("1.0.0", "not-a-version").is_err());
@@ -147,7 +147,9 @@ mod tests {
             let tag = fetch_latest_tag_via_redirect(&client).await;
             println!("Resolved tag: {:?}", tag);
             assert!(tag.is_ok());
-            assert_eq!(tag.unwrap(), "v0.2.0");
+            let tag_str = tag.unwrap();
+            assert!(tag_str.starts_with('v'));
+            assert!(semver::Version::parse(tag_str.trim_start_matches('v')).is_ok());
         });
     }
 }

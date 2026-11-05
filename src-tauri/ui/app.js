@@ -108,7 +108,15 @@ updateButton.addEventListener("click", async () => {
       message("更新服务尚未配置，暂时无法检查更新。");
     } else if (result?.available === true) {
       const v = result.version ? (result.version.startsWith("v") ? result.version : `v${result.version}`) : "";
-      message(`发现新版本 ${v}，请前往 GitHub Releases 下载更新。`);
+      message(`发现新版本 ${v}，可前往下载更新。`);
+      updateButton.textContent = "前往下载";
+      updateButton.disabled = false;
+      updateButton.onclick = async () => {
+        try {
+          await invoke("open_external_url", { url: "https://github.com/taozhuowei/muse-desktop/releases/latest" });
+        } catch (_) {}
+      };
+      return;
     } else if (result?.available === false || result?.status === "up_to_date") {
       const curVer = document.getElementById("version").textContent || "";
       message(`当前已是最新版本 (${curVer})。`);
