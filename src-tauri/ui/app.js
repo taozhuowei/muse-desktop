@@ -7,8 +7,11 @@ const autostart = document.getElementById("autostart");
 const cacheButton = document.getElementById("clear-cache");
 const updateButton = document.getElementById("check-updates");
 const updateDescription = document.getElementById("update-description");
+const progressContainer = document.getElementById("update-progress-container");
+const progressBar = document.getElementById("update-progress-bar");
 const status = document.getElementById("status");
 let resizing = false;
+let pendingVersion = null;
 
 function invoke(command, args) {
   if (!window.__TAURI__?.core?.invoke) {
@@ -98,32 +101,92 @@ cacheButton.addEventListener("click", async () => {
   }
 });
 
-updateButton.addEventListener("click", async () => {
+// 监听后端更新下载进度事件
+if (window.__TAURI__?.event?.listen) {
+  window.__TAURI__.event.listen("update-download-progress", (event) => {
+    const payload = event.payload;
+    if (!payload) return;
+
+    if (payload.status === "downloading") {
+      const pct = payload.percentage || 0;
+      const mbDl = (payload.downloaded_bytes / (1024 * 1024)).toFixed(1);
+      const mbTotal = (payload.total_bytes / (1024 * 1024)).toFixed(1);
+      if (progressContainer) progressContainer.hidden = false;
+      if (progressBar) progressBar.style.width = `${pct}%`;
+      updateButton.textContent = `下载中 ${pct}%`;
+      message(`正在拉取更新：${pct}% (${mbDl} MB / ${mbTotal} MB)`);
+    } else if (payload.status === "ready") {
+      if (progressBar) progressBar.style.width = "100%";
+      updateButton.textContent = "正在安装";
+      message("更新包下载完成，正在启动安装程序并重启应用...");
+    } else if (payload.status === "error") {
+      if (progressContainer) progressContainer.hidden = true;
+      updateButton.disabled = false;
+      updateButton.textContent = "重试更新";
+      message(`更新下载失败：${payload.message || "网络中断"}，请稍后重试。`, true);
+    }
+  });
+}
+
+async function performInstall(version) {
   updateButton.disabled = true;
+  updateButton.textContent = "准备拉取...";
+  if (progressContainer) progressContainer.hidden = false;
+  if (progressBar) progressBar.style.width = "0%";
+  message("正在连接更新服务器，准备拉取安装包...");
+
+  try {
+    await invoke("download_and_install_update", { version });
+  } catch (error) {
+    if (progressContainer) progressContainer.hidden = true;
+    updateButton.disabled = false;
+    updateButton.textContent = "立即更新";
+    message(`更新失败：${errorText(error)}`, true);
+  }
+}
+
+updateButton.addEventListener("click", async () => {
+  // 如果已处于待更新状态，直接执行本地拉取更新
+  if (pendingVersion) {
+    await performInstall(pendingVersion);
+    return;
+  }
+
+  updateButton.disabled = true;
+  updateButton.textContent = "正在检查…";
+  if (progressContainer) progressContainer.hidden = true;
   message("正在检查更新…");
+
   try {
     const result = await invoke("check_updates");
     if (result?.configured === false || result?.status === "not_configured") {
       updateDescription.textContent = "更新服务尚未配置";
       message("更新服务尚未配置，暂时无法检查更新。");
-    } else if (result?.available === true) {
-      const v = result.version ? (result.version.startsWith("v") ? result.version : `v${result.version}`) : "";
-      message(`发现新版本 ${v}，可前往下载更新。`);
-      updateButton.textContent = "前往下载";
       updateButton.disabled = false;
-      updateButton.onclick = async () => {
-        try {
-          await invoke("open_external_url", { url: "https://github.com/taozhuowei/muse-desktop/releases/latest" });
-        } catch (_) {}
-      };
-      return;
+      updateButton.textContent = "检查更新";
+    } else if (result?.available === true) {
+      pendingVersion = result.version;
+      const v = pendingVersion.startsWith("v") ? pendingVersion : `v${pendingVersion}`;
+      updateDescription.textContent = `发现新版本 ${v}，可直接本地更新`;
+      message(`发现新版本 ${v}，点击「立即更新」在本地直接拉取安装。`);
+      updateButton.textContent = "立即更新";
+      updateButton.classList.add("primary");
+      updateButton.disabled = false;
     } else if (result?.available === false || result?.status === "up_to_date") {
+      pendingVersion = null;
+      updateButton.classList.remove("primary");
+      updateButton.textContent = "检查更新";
+      updateButton.disabled = false;
       const curVer = document.getElementById("version").textContent || "";
       message(`当前已是最新版本 (${curVer})。`);
     } else {
+      updateButton.disabled = false;
+      updateButton.textContent = "检查更新";
       message("更新检查已完成。");
     }
   } catch (error) {
+    updateButton.disabled = false;
+    updateButton.textContent = "检查更新";
     const rawMsg = errorText(error);
     if (rawMsg.includes("403") || rawMsg.includes("Rate Limit")) {
       message("GitHub 访问频次受限，请稍后重试。", true);
@@ -132,8 +195,6 @@ updateButton.addEventListener("click", async () => {
     } else {
       message(`检查更新失败：${rawMsg}`, true);
     }
-  } finally {
-    updateButton.disabled = false;
   }
 });
 

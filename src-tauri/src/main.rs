@@ -565,7 +565,7 @@ fn main() {
     tauri::Builder::default()
         .manage(ShellHeight(Mutex::new(SHELL_COLLAPSED_HEIGHT)))
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![push_desktop_notification, log_from_web, open_external_url, resize_shell_bar, shell_settings::get_shell_info, shell_settings::set_autostart, browser_cache::clear_browser_cache, update_check::check_updates])
+        .invoke_handler(tauri::generate_handler![push_desktop_notification, log_from_web, open_external_url, resize_shell_bar, shell_settings::get_shell_info, shell_settings::set_autostart, browser_cache::clear_browser_cache, update_check::check_updates, update_check::download_and_install_update])
         .setup(|app| {
             init_logger(app.handle());
 
