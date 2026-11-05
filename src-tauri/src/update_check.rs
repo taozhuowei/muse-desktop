@@ -254,7 +254,7 @@ pub async fn download_and_install_update(
     #[cfg(target_os = "windows")]
     {
         crate::log_msg("Updater", "INFO", "启动安装程序并准备退出当前旧应用");
-        let spawn_res = std::process::Command::new(&dest_path).spawn();
+        let spawn_res = std::process::Command::new(&dest_path).arg("/UPDATE").spawn();
         if let Err(e) = spawn_res {
             let err_msg = format!("启动安装程序失败：{e}");
             crate::log_msg("Updater", "ERROR", &err_msg);
@@ -286,9 +286,9 @@ mod tests {
 
     #[test]
     fn compares_semver_tags() {
-        assert!(compare_versions("0.2.3", "v0.10.0").unwrap().available);
-        assert!(!compare_versions("0.2.3", "v0.2.3").unwrap().available);
-        assert!(!compare_versions("0.2.3", "0.2.0").unwrap().available);
+        assert!(compare_versions("0.2.4", "v0.10.0").unwrap().available);
+        assert!(!compare_versions("0.2.4", "v0.2.4").unwrap().available);
+        assert!(!compare_versions("0.2.4", "0.2.0").unwrap().available);
         assert!(!compare_versions("1.0.0", "v1.0.0-rc.1").unwrap().available);
         assert!(compare_versions("1.0.0-rc.1", "v1.0.0").unwrap().available);
         assert!(compare_versions("1.0.0", "not-a-version").is_err());
